@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 
 from dataclasses import dataclass, asdict
+from typing import Optional
+
 import dotenv
 from fastapi import FastAPI
 import modal
@@ -163,6 +165,7 @@ class InferenceConfig:
     num_inferences: int = 16
     num_inference_steps: int = 50
     guidance_scale: float = 7.5
+    seed: Optional[int] = None  # Optionally set seed here manually
 
 
 # package up local information about inference prompt to share with Modal
@@ -199,9 +202,10 @@ def infer(config=InferenceConfig()):
     import wandb
 
     # set up a hugging face inference pipeline using our model
+    device = "cuda"
     pipe = StableDiffusionPipeline.from_pretrained(
         MODEL_DIR, torch_dtype=torch.float16
-    ).to("cuda")
+    ).to(device)
 
     # create prompt based on dreambooth training instance info
     prompt_prefix = os.environ.get("PROMPT_PREFIX", "")
@@ -213,7 +217,8 @@ def infer(config=InferenceConfig()):
     prompt = os.environ.get("DIRECT_PROMPT") or prompt
 
     # consume inference configuration info
-    num_inferences = config.num_inferences
+    seed = config.seed
+    num_inferences = 1 if seed is not None else config.num_inferences
     num_inference_steps = config.num_inference_steps
     guidance_scale = config.guidance_scale
 
@@ -221,14 +226,27 @@ def infer(config=InferenceConfig()):
     wandb.init(project=f"{os.environ['PROJECT_NAME']}", config={"prompt": prompt})
 
     # run inference
-    for _ in range(num_inferences):
-        image = pipe(
-            prompt,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-        ).images[0]
+    generator = torch.Generator(device=device)
+    for i in range(num_inferences):
+        if seed is None:
+            seed = generator.seed()
+        generator = generator.manual_seed(seed)
+        latents = torch.randn(
+            (1, pipe.unet.in_channels, 512 // 8, 512 // 8),
+            generator=generator,
+            device=device
+        )
 
-        wandb.log({"generation": wandb.Image(image, caption=prompt)})
+        with torch.autocast(device):
+            image = pipe(
+                prompt,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                latents=latents,
+            ).images[0]
+
+        wandb.log({"generation": wandb.Image(image, caption=f"seed={seed} {prompt}")})
+        seed = None
 
     # close out wandb Run
     wandb.finish()

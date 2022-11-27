@@ -1,2 +1,9 @@
 __pycache__
 .env.secrets
+.idea/
+*.heic
+*.HEIC
+*.jpg
+*.DS_Store
+raw_urls.txt
+urls.txt

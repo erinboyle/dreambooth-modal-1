@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +14,10 @@ import modal
 # load the .env file into the local environment
 #  change the entries there to change the behavior
 dotenv.load_dotenv(".env")
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler())
 
 
 @dataclass
@@ -75,7 +80,7 @@ class TrainConfig:
     resolution: int = 512
     train_batch_size: int = 1
     gradient_accumulation_steps: int = 1
-    learning_rate: float = 5e-6
+    learning_rate: float = 2e-6
     lr_scheduler: str = "constant"
     lr_warmup_steps: int = 0
     max_train_steps: int = 400
@@ -88,11 +93,11 @@ class TrainConfig:
     shared_volumes={
         str(MODEL_DIR): volume
     },  # mounts the shared volume for storing model weights
-    timeout=480,
+    timeout=60 * 20,
     # project-level configuration info is sent via a Secret, as are API keys
     secrets=[modal.Secret.from_name("huggingface"), stub["local_config"]],
     # interactive setups allow for easier debugging, deactivate if you hit bugs
-    interactive=True,
+    # interactive=True,
 )
 def train(config=TrainConfig()):
     """Finetunes a Stable Diffusion model on a target instance.
@@ -182,12 +187,13 @@ stub["inference_prompts"] = modal.Secret(inference_prompts)
     gpu=gpu,
     cpu=1,  # during inference, CPU is less of a bottleneck
     shared_volumes={str(MODEL_DIR): volume},
-    timeout=120,
+    timeout=60 * 10,
     secrets=[
         modal.Secret.from_name("wandb"),
         stub["inference_prompts"],
         stub["local_config"],
     ],
+    # interactive=True,
 )
 def infer(config=InferenceConfig()):
     """Run inference on Modal with a finetuned model.
@@ -226,6 +232,7 @@ def infer(config=InferenceConfig()):
     wandb.init(project=f"{os.environ['PROJECT_NAME']}", config={"prompt": prompt})
 
     # run inference
+    logger.info(f"Running for {num_inferences} inferences, seed={seed}")
     generator = torch.Generator(device=device)
     for i in range(num_inferences):
         if seed is None:
@@ -332,6 +339,7 @@ def save_images(images):
     os.makedirs(IMG_PATH, exist_ok=True)
     for ii, image in enumerate(images):
         image.save(IMG_PATH / f"{ii}.png")
+    logger.info("Training images saved.")
 
 
 def get_image_from_url(image_url):
